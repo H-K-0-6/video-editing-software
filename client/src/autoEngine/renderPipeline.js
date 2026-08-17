@@ -321,20 +321,31 @@ export class VideoRenderEngine {
 
     const stream = this.canvas.captureStream(30);
 
-    let audioContext = null;
     if (this.audioElement) {
       try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const src = audioContext.createMediaElementSource(this.audioElement);
-        const dest = audioContext.createMediaStreamDestination();
-        src.connect(dest);
-        src.connect(audioContext.destination);
-        const audioTrack = dest.stream.getAudioTracks()[0];
+        if (!this._audioCtx) {
+          this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          this._audioSrcNode = this._audioCtx.createMediaElementSource(this.audioElement);
+          this._audioDestNode = this._audioCtx.createMediaStreamDestination();
+          this._audioSrcNode.connect(this._audioDestNode);
+          this._audioSrcNode.connect(this._audioCtx.destination);
+        }
+        if (this._audioCtx.state === 'suspended') {
+          await this._audioCtx.resume();
+        }
+        const audioTrack = this._audioDestNode.stream.getAudioTracks()[0];
         if (audioTrack) stream.addTrack(audioTrack);
       } catch (err) {
-        console.warn('Audio stream capture error:', err);
+        console.warn('Audio capture setup warning:', err);
       }
     }
+
+    // Determine target duration (max of totalDuration, last clip end, or 15s)
+    let maxClipEnd = 0;
+    if (this.clips && this.clips.length > 0) {
+      maxClipEnd = Math.max(...this.clips.map(c => c.endTime || 0));
+    }
+    const targetDuration = Math.max(this.totalDuration || 0, maxClipEnd, 10);
 
     // Prioritize MP4 formats (H.264/AVC1 + AAC/MP4A) for universal playback on all devices
     const candidateTypes = [
@@ -359,26 +370,36 @@ export class VideoRenderEngine {
     recorder.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
 
     return new Promise((resolve, reject) => {
+      let isExportFinished = false;
+
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
-        if (audioContext) audioContext.close();
         resolve(blob);
       };
-      recorder.onerror = e => { if (audioContext) audioContext.close(); reject(e); };
+      recorder.onerror = e => reject(e);
 
-      recorder.start(50); // 50ms chunks for smoother progress
+      recorder.start(100);
       this.play();
 
       const startWall = performance.now();
-      const totalMs = this.totalDuration * 1000;
+      const totalMs = targetDuration * 1000;
 
       const iv = setInterval(() => {
+        if (isExportFinished) return;
         const elapsed = performance.now() - startWall;
-        if (onProgressCallback) onProgressCallback(Math.min(100, Math.round(elapsed / totalMs * 100)));
-        if (this.currentTime >= this.totalDuration || elapsed >= totalMs + 500) {
+        const currentProgress = Math.min(99, Math.round((Math.max(this.currentTime, elapsed / 1000) / targetDuration) * 100));
+        if (onProgressCallback) onProgressCallback(currentProgress);
+
+        if (this.currentTime >= targetDuration || elapsed >= totalMs + 500) {
+          isExportFinished = true;
           clearInterval(iv);
           this.pause();
-          setTimeout(() => recorder.stop(), 200);
+          if (onProgressCallback) onProgressCallback(100);
+          setTimeout(() => {
+            try {
+              if (recorder.state !== 'inactive') recorder.stop();
+            } catch (_) {}
+          }, 300);
         }
       }, 100);
     });

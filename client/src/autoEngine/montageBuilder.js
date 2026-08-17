@@ -11,9 +11,10 @@ export function generateMontageTimeline(mediaList, audioDuration, beats = [], th
 
   const theme = THEMES.find((t) => t.id === themeId) || THEMES[0];
   const [minCut, maxCut] = theme.targetCutDuration;
+  const effectiveDuration = Math.max(audioDuration || 15, 10);
 
   // Filter beats within the audio total duration
-  const validBeats = beats.filter((b) => b < audioDuration);
+  const validBeats = (beats || []).filter((b) => b > 0.5 && b < effectiveDuration - 0.5);
 
   // Group beats to form segment intervals matching theme's min/max duration
   const cutPoints = [0];
@@ -22,21 +23,21 @@ export function generateMontageTimeline(mediaList, audioDuration, beats = [], th
   if (validBeats.length > 0) {
     for (const beat of validBeats) {
       const durationSinceLast = beat - lastCut;
-      if (durationSinceLast >= minCut) {
+      if (durationSinceLast >= minCut && durationSinceLast <= maxCut * 1.5) {
         cutPoints.push(beat);
         lastCut = beat;
       }
     }
   }
 
-  // If there's remaining time or not enough beats, fill regularly
-  while (lastCut + minCut < audioDuration) {
-    const nextCut = Math.min(lastCut + (minCut + maxCut) / 2, audioDuration);
+  // If there's remaining time or not enough beats, fill regularly to effectiveDuration
+  while (lastCut + minCut < effectiveDuration) {
+    const nextCut = Math.min(lastCut + (minCut + maxCut) / 2, effectiveDuration);
     cutPoints.push(nextCut);
     lastCut = nextCut;
   }
-  if (cutPoints[cutPoints.length - 1] < audioDuration) {
-    cutPoints.push(audioDuration);
+  if (cutPoints[cutPoints.length - 1] < effectiveDuration) {
+    cutPoints.push(effectiveDuration);
   }
 
   const clips = [];
