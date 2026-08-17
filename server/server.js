@@ -3,8 +3,22 @@ import cors from 'cors';
 import { spawn, execSync, execFileSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── YouTube Cookies Setup ─────────────────────────────────────────────────────
+let ytCookiesPath = null;
+if (process.env.YOUTUBE_COOKIES) {
+  try {
+    ytCookiesPath = path.join(__dirname, 'youtube_cookies.txt');
+    fs.writeFileSync(ytCookiesPath, process.env.YOUTUBE_COOKIES, 'utf8');
+    console.log('[Setup] Saved YOUTUBE_COOKIES to', ytCookiesPath);
+  } catch (err) {
+    console.error('[Setup] Failed to write youtube cookies:', err);
+  }
+}
+
 const app = express();
 const PORT = 3001;
 
@@ -139,12 +153,14 @@ app.get('/api/youtube-audio', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Content-Type', 'audio/mpeg'); // always mp3
 
-  const cookieStrategies = [
+  const cookieStrategies = [];
+  if (ytCookiesPath) cookieStrategies.push(['--cookies', ytCookiesPath]);
+  cookieStrategies.push(
     ['--cookies-from-browser', 'chrome'],
     ['--cookies-from-browser', 'edge'],
     ['--cookies-from-browser', 'firefox'],
     [] // fallback to no cookies
-  ];
+  );
 
   let started = false;
 
@@ -206,12 +222,14 @@ app.get('/api/youtube-info', (req, res) => {
   if (!url) return res.status(400).json({ error: 'URL required' });
   if (!YTDLP) return res.status(503).json({ error: 'yt-dlp not found' });
 
-  const cookieStrategies = [
+  const cookieStrategies = [];
+  if (ytCookiesPath) cookieStrategies.push(['--cookies', ytCookiesPath]);
+  cookieStrategies.push(
     ['--cookies-from-browser', 'chrome'],
     ['--cookies-from-browser', 'edge'],
     ['--cookies-from-browser', 'firefox'],
     [] // fallback
-  ];
+  );
 
   function tryInfo(strategyIndex, lastError = '') {
     if (strategyIndex >= cookieStrategies.length) {
