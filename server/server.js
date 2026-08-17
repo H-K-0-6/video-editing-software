@@ -322,6 +322,9 @@ app.get('/api/youtube-audio', async (req, res) => {
   if (ytCookiesPath) {
     strategies.push(['--cookies', ytCookiesPath]);
   }
+  strategies.push(['--extractor-args', 'youtube:player_client=web_safari']);
+  strategies.push(['--extractor-args', 'youtube:player_client=web']);
+  strategies.push(['--extractor-args', 'youtube:player_client=android']);
   strategies.push(['--extractor-args', 'youtube:player_client=android_vr,mweb']);
   strategies.push([]);
 

@@ -15,8 +15,8 @@ RUN curl -fsSL https://deno.land/install.sh | sh
 ENV DENO_INSTALL="/root/.deno"
 ENV PATH="$DENO_INSTALL/bin:$PATH"
 
-# Install yt-dlp via pip (this ensures we have the latest Linux version)
-RUN pip3 install yt-dlp --break-system-packages
+# Install latest master build of yt-dlp with latest anti-bot fixes
+RUN pip3 install --upgrade --no-cache-dir https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz --break-system-packages
 
 # Set working directory
 WORKDIR /app
