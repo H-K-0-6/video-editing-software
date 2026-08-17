@@ -15,7 +15,7 @@ export default function App() {
   const [mediaList, setMediaList] = useState([]);
   
   // Audio state
-  const [audioSourceType, setAudioSourceType] = useState('youtube');
+  const [audioSourceType, setAudioSourceType] = useState('preset');
   const [youtubeUrl, setYoutubeUrl] = useState('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
   const [youtubeStartTime, setYoutubeStartTime] = useState('00:15');
   const [youtubeEndTime, setYoutubeEndTime] = useState('00:35');
@@ -111,26 +111,33 @@ export default function App() {
     });
   };
 
-  // Load demo royalty-free high energy track
-  const handleLoadDemoTrack = async () => {
+  // Load curated soundtrack preset track (1-tap on phone)
+  const handleLoadPresetTrack = async (track) => {
     setIsLoadingAudio(true);
     try {
-      // Demo energetic electronic beat sound URL
-      const demoAudioUrl = 'https://cdn.freesound.org/previews/568/568853_11861866-lq.mp3';
       const audioEl = new Audio();
       audioEl.crossOrigin = 'anonymous';
-      audioEl.src = demoAudioUrl;
+      audioEl.src = track.url;
       audioEl.preload = 'auto';
       setAudioElement(audioEl);
 
-      const resp = await fetch(demoAudioUrl);
+      const resp = await fetch(track.url);
       const ab = await resp.arrayBuffer();
-      await processAudioBuffer(ab, 'Demo High Energy Beat.mp3', 15);
+      await processAudioBuffer(ab, `${track.title} (${track.genre})`, track.duration || 15);
     } catch (err) {
-      console.error('Demo audio error:', err);
+      console.error('Preset audio error:', err);
     } finally {
       setIsLoadingAudio(false);
     }
+  };
+
+  const handleLoadDemoTrack = async () => {
+    handleLoadPresetTrack({
+      title: 'High Energy Beat',
+      genre: 'EDM',
+      url: 'https://cdn.freesound.org/previews/568/568853_11861866-lq.mp3',
+      duration: 15,
+    });
   };
 
   // Local audio file selected
@@ -309,7 +316,7 @@ export default function App() {
                 onFetchYoutubeAudio={handleFetchYoutubeAudio}
                 audioInfo={audioInfo}
                 isLoadingAudio={isLoadingAudio}
-                onLoadDemoTrack={handleLoadDemoTrack}
+                onLoadPresetTrack={handleLoadPresetTrack}
                 statusMessage={statusMessage}
               />
               <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
