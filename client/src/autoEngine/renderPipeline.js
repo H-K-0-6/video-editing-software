@@ -387,26 +387,31 @@ export class VideoRenderEngine {
       }
 
       const FPS = 30;
-      const frameDuration = 1 / FPS;
       let currentTime = 0;
-      const totalFrames = Math.ceil(targetDuration * FPS);
-      let frameCount = 0;
+      const startWall = performance.now();
 
       const exportInterval = setInterval(() => {
         if (isDone) return;
 
-        currentTime = frameCount * frameDuration;
+        let elapsedReal = (performance.now() - startWall) / 1000;
+        
+        // Sync time to audio if playing, otherwise fallback to real time
+        if (this.audioElement && this.audioElement.currentTime > 0) {
+           currentTime = this.audioElement.currentTime;
+        } else {
+           currentTime = elapsedReal;
+        }
+        
         this.currentTime = currentTime;
 
         // Render current frame
         this._syncVideoPlayback(currentTime);
         this.drawFrame(currentTime);
 
-        frameCount++;
-        const pct = Math.min(99, Math.round((frameCount / totalFrames) * 100));
+        const pct = Math.min(99, Math.round((currentTime / targetDuration) * 100));
         if (onProgressCallback) onProgressCallback(pct);
 
-        if (frameCount >= totalFrames) {
+        if (currentTime >= targetDuration || elapsedReal >= targetDuration + 1) {
           isDone = true;
           clearInterval(exportInterval);
 
