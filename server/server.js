@@ -254,6 +254,14 @@ app.get('/api/youtube-info', (req, res) => {
   tryInfo(0);
 });
 
+// Serve static files from the React frontend app
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
+// Catch-all route to serve index.html for client-side routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+});
+
 app.listen(PORT, () => {
   if (YTDLP)  console.log(`✅ yt-dlp  found: ${YTDLP}`);
   else        console.error('❌ yt-dlp  NOT FOUND — place yt-dlp.exe in server/bin/');

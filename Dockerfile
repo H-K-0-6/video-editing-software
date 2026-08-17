@@ -14,15 +14,21 @@ RUN pip3 install yt-dlp --break-system-packages
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and install dependencies
-COPY server/package*.json ./
-RUN npm install
+# ---- Build Frontend ----
+COPY client/package*.json ./client/
+RUN cd client && npm install
 
-# Copy all server files
-COPY server/ .
+COPY client/ ./client/
+RUN cd client && npm run build
+
+# ---- Setup Backend ----
+COPY server/package*.json ./server/
+RUN cd server && npm install
+
+COPY server/ ./server/
 
 # Expose the API port
 EXPOSE 3001
 
 # Start the Express server
-CMD ["node", "server.js"]
+CMD ["node", "server/server.js"]
