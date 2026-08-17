@@ -122,6 +122,7 @@ app.get('/api/youtube-audio', (req, res) => {
     '--downloader', 'ffmpeg',                    // ALWAYS use ffmpeg for streaming
     '--downloader-args', 'ffmpeg:-vn -f mp3',    // ALWAYS force mp3 output (drops video)
     '--force-ipv4',
+    '--js-runtimes', 'nodejs',
     ...ffmpegArgs,
     ...sectionArgs,
     '--no-playlist',
@@ -218,7 +219,7 @@ app.get('/api/youtube-info', (req, res) => {
     }
 
     const args = [
-      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4',
+      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4', '--js-runtimes', 'nodejs',
       ...cookieStrategies[strategyIndex],
       '-q',
       url,
