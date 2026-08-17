@@ -133,121 +133,84 @@ function streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res) {
   return true;
 }
 
-// ── Helper: Multi-Provider Fallback Streamer (Piped, Cobalt, Invidious) ────────
-async function streamViaMultiProviderFallback(videoId, startSec, endSec, res) {
-  // Provider 1: Piped API instances
-  const pipedInstances = [
+// ── Helper: Parallel Multi-Provider Audio Resolver (Fast <1s Response) ────────
+async function resolveAudioStreamUrlParallel(videoId) {
+  const resolvers = [];
+
+  // Piped endpoints
+  const pipedHosts = [
     'https://pipedapi.kavin.rocks',
     'https://api.piped.privacy.com.de',
     'https://pipedapi.tokhmi.xyz',
     'https://pipedapi.adminforge.de',
     'https://piped-api.lunar.icu',
+    'https://piped-api.garudalinux.org',
   ];
 
-  for (const instance of pipedInstances) {
-    try {
-      console.log(`[Fallback: Piped] Trying ${instance}/streams/${videoId}...`);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const resp = await fetch(`${instance}/streams/${videoId}`, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      });
-      clearTimeout(timeout);
-
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const audioStreams = data.audioStreams || [];
-      if (!audioStreams.length) continue;
-
-      const selected = audioStreams.find((s) => s.itag === 140 || s.itag === '140') || audioStreams[0];
-      if (selected && selected.url) {
-        console.log(`[Fallback: Piped] Success! Slicing audio stream with FFmpeg...`);
-        return streamAudioFromUrlWithFfmpeg(selected.url, startSec, endSec, res);
-      }
-    } catch (err) {
-      console.warn(`[Fallback: Piped] ${instance} failed:`, err.message);
-    }
+  for (const host of pipedHosts) {
+    resolvers.push(
+      (async () => {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 4000);
+        try {
+          const r = await fetch(`${host}/streams/${videoId}`, {
+            signal: c.signal,
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          });
+          clearTimeout(t);
+          if (!r.ok) throw new Error(`${host} status ${r.status}`);
+          const j = await r.json();
+          const streams = j.audioStreams || [];
+          const s = streams.find((x) => x.itag === 140 || x.itag === '140') || streams[0];
+          if (s && s.url) return s.url;
+          throw new Error('No stream');
+        } finally {
+          clearTimeout(t);
+        }
+      })()
+    );
   }
 
-  // Provider 2: Cobalt API instances
-  const cobaltInstances = [
-    'https://cobalt-api.kwiatekm.pl',
-    'https://api.cobalt.tools',
-  ];
-
-  for (const instance of cobaltInstances) {
-    try {
-      console.log(`[Fallback: Cobalt] Trying ${instance}...`);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const resp = await fetch(instance, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
-        },
-        body: JSON.stringify({
-          url: `https://www.youtube.com/watch?v=${videoId}`,
-          downloadMode: 'audio',
-          audioFormat: 'mp3',
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      if (data && (data.url || data.audio)) {
-        const streamUrl = data.url || data.audio;
-        console.log(`[Fallback: Cobalt] Success! Slicing audio stream with FFmpeg...`);
-        return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
-      }
-    } catch (err) {
-      console.warn(`[Fallback: Cobalt] ${instance} failed:`, err.message);
-    }
-  }
-
-  // Provider 3: Invidious instances
-  const invidiousInstances = [
+  // Invidious endpoints
+  const invidiousHosts = [
     'https://invidious.nerdvpn.de',
     'https://inv.tux.pizza',
     'https://invidious.private.coffee',
     'https://yt.drgnz.club',
   ];
 
-  for (const instance of invidiousInstances) {
-    try {
-      console.log(`[Fallback: Invidious] Trying ${instance} for ${videoId}...`);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const resp = await fetch(`${instance}/api/v1/videos/${videoId}`, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      });
-      clearTimeout(timeout);
-
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const audioStreams = (data.adaptiveFormats || []).filter(
-        (f) => f.type && f.type.startsWith('audio')
-      );
-      if (!audioStreams.length) continue;
-
-      const selected =
-        audioStreams.find((f) => f.itag === 140 || f.itag === '140' || f.itag === 251 || f.itag === '251') ||
-        audioStreams[0];
-
-      const streamUrl = selected.url || `${instance}/latest_version?id=${videoId}&itag=${selected.itag}&local=true`;
-      console.log(`[Fallback: Invidious] Success! Slicing audio stream with FFmpeg...`);
-      return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
-    } catch (err) {
-      console.warn(`[Fallback: Invidious] ${instance} failed:`, err.message);
-    }
+  for (const host of invidiousHosts) {
+    resolvers.push(
+      (async () => {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 4000);
+        try {
+          const r = await fetch(`${host}/api/v1/videos/${videoId}`, {
+            signal: c.signal,
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          });
+          clearTimeout(t);
+          if (!r.ok) throw new Error(`${host} status ${r.status}`);
+          const j = await r.json();
+          const streams = (j.adaptiveFormats || []).filter((f) => f.type && f.type.startsWith('audio'));
+          const s = streams.find((f) => f.itag === 140 || f.itag === '140' || f.itag === 251) || streams[0];
+          if (s) return s.url || `${host}/latest_version?id=${videoId}&itag=${s.itag}&local=true`;
+          throw new Error('No stream');
+        } finally {
+          clearTimeout(t);
+        }
+      })()
+    );
   }
 
-  return false;
+  try {
+    const fastestUrl = await Promise.any(resolvers);
+    console.log('[Fast Resolver] Found valid audio stream URL in parallel!');
+    return fastestUrl;
+  } catch (err) {
+    console.warn('[Fast Resolver] All parallel providers failed:', err.message);
+    return null;
+  }
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -271,8 +234,32 @@ app.get('/api/youtube-audio', async (req, res) => {
   const endSec   = parseFloat(end)   || 0;
   const hasRange = endSec > startSec;
 
-  const ffmpegArgs = (FFMPEG && path.dirname(FFMPEG) !== '.') ? ['--ffmpeg-location', path.dirname(FFMPEG)] : [];
+  if (hasRange) {
+    console.log(`[Audio Request] Trimming ${secToTimestamp(startSec)} → ${secToTimestamp(endSec)} | ${cleanUrl}`);
+  } else {
+    console.log(`[Audio Request] Full audio | ${cleanUrl}`);
+  }
 
+  // 1. FAST PATH: If videoId is present and no cookies were manually loaded on server,
+  // query our high-speed decentralized resolver network first!
+  if (videoId && !ytCookiesPath) {
+    try {
+      console.log(`[Fast Path] Querying parallel audio providers for ${videoId}...`);
+      const streamUrl = await resolveAudioStreamUrlParallel(videoId);
+      if (streamUrl) {
+        return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
+      }
+    } catch (err) {
+      console.warn('[Fast Path] Parallel resolution error:', err);
+    }
+  }
+
+  // 2. yt-dlp path (with cookies or fallback)
+  if (!YTDLP) {
+    return res.status(503).json({ error: 'Audio processor not ready on server.' });
+  }
+
+  const ffmpegArgs = (FFMPEG && path.dirname(FFMPEG) !== '.') ? ['--ffmpeg-location', path.dirname(FFMPEG)] : [];
   const sectionArgs = hasRange
     ? [
         '--download-sections', `*${secToTimestamp(startSec)}-${secToTimestamp(endSec)}`,
@@ -291,38 +278,23 @@ app.get('/api/youtube-audio', async (req, res) => {
     '-o', '-',
   ];
 
-  if (hasRange) {
-    console.log(`[yt-dlp] Trimming ${secToTimestamp(startSec)} → ${secToTimestamp(endSec)} | ${cleanUrl}`);
-  } else {
-    console.log(`[yt-dlp] Full audio | ${cleanUrl}`);
-  }
-
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Content-Type', 'audio/mpeg');
-
-  // Build strategies based on environment
   const strategies = [];
   if (ytCookiesPath) {
     strategies.push(['--cookies', ytCookiesPath]);
   }
-  if (process.platform === 'win32') {
-    strategies.push(['--cookies-from-browser', 'chrome']);
-    strategies.push(['--cookies-from-browser', 'edge']);
-    strategies.push(['--cookies-from-browser', 'firefox']);
-  }
-  // Client rotation strategies for datacenter IP resilience
   strategies.push(['--extractor-args', 'youtube:player_client=android_vr,mweb']);
-  strategies.push(['--extractor-args', 'youtube:player_client=web_creator,mweb']);
-  strategies.push([]); // Default
+  strategies.push([]);
 
   let started = false;
 
   async function tryStream(strategyIndex, lastError = '') {
     if (strategyIndex >= strategies.length) {
-      console.log('[yt-dlp] All native strategies failed. Attempting resilient stream fallback...');
+      // Last chance: Try parallel resolver if not tried yet
       if (videoId) {
-        const fallbackSuccess = await streamViaMultiProviderFallback(videoId, startSec, endSec, res);
-        if (fallbackSuccess) return;
+        const streamUrl = await resolveAudioStreamUrlParallel(videoId);
+        if (streamUrl) {
+          return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
+        }
       }
 
       if (!res.headersSent) {
@@ -343,6 +315,10 @@ app.get('/api/youtube-audio', async (req, res) => {
     proc.stdout.on('data', (chunk) => {
       hadData = true;
       started = true;
+      if (!res.headersSent) {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Content-Type', 'audio/mpeg');
+      }
       res.write(chunk);
     });
 
@@ -359,8 +335,6 @@ app.get('/api/youtube-audio', async (req, res) => {
         if (!res.writableEnded) res.end();
         return;
       }
-
-      console.warn(`[yt-dlp] Strategy ${strategyIndex} exited code=${code}`);
 
       if (!started) {
         tryStream(strategyIndex + 1, stderr.trim());
@@ -402,62 +376,10 @@ app.get('/api/youtube-info', async (req, res) => {
     return null;
   }
 
-  if (!YTDLP) {
-    const info = await fetchOEmbedInfo();
-    if (info) return res.json(info);
-    return res.status(503).json({ error: 'yt-dlp not found' });
-  }
+  const info = await fetchOEmbedInfo();
+  if (info) return res.json(info);
 
-  const strategies = [];
-  if (ytCookiesPath) strategies.push(['--cookies', ytCookiesPath]);
-  strategies.push(['--extractor-args', 'youtube:player_client=android_vr,mweb']);
-  strategies.push([]);
-
-  function tryInfo(strategyIndex, lastError = '') {
-    if (strategyIndex >= strategies.length) {
-      // Fall back to oEmbed
-      fetchOEmbedInfo().then((info) => {
-        if (info) return res.json(info);
-        res.status(500).json({ error: `Failed to fetch info. Last error: ${lastError}` });
-      });
-      return;
-    }
-
-    const args = [
-      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4',
-      ...strategies[strategyIndex],
-      '-q',
-      cleanUrl,
-    ];
-
-    let output = '';
-    let stderr = '';
-    const proc = spawn(YTDLP, args);
-    proc.stdout.on('data', (d) => (output += d.toString()));
-    proc.stderr.on('data', (d) => (stderr += d.toString()));
-
-    proc.on('close', (code) => {
-      if (code !== 0 || !output.trim()) {
-        return tryInfo(strategyIndex + 1, stderr.trim());
-      }
-      try {
-        const json = JSON.parse(output);
-        res.json({
-          title: json.title,
-          author: json.channel || json.uploader || 'Unknown',
-          lengthSeconds: json.duration || 0,
-          thumbnail: json.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
-        });
-      } catch {
-        fetchOEmbedInfo().then((info) => {
-          if (info) return res.json(info);
-          res.status(500).json({ error: 'Failed to parse yt-dlp info' });
-        });
-      }
-    });
-  }
-
-  tryInfo(0);
+  res.status(500).json({ error: 'Could not fetch YouTube info' });
 });
 
 // Serve static files from the React frontend app
