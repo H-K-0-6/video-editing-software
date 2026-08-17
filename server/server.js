@@ -100,12 +100,14 @@ function normalizeYouTubeUrl(rawUrl) {
 // ── Helper: Stream from direct audio URL with ffmpeg ──────────────────────────
 function streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res) {
   const ffmpegCmd = FFMPEG || 'ffmpeg';
-  const ffmpegArgs = [];
+  const ffmpegArgs = [
+    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\n',
+  ];
   if (startSec > 0) ffmpegArgs.push('-ss', secToTimestamp(startSec));
   if (endSec > startSec) ffmpegArgs.push('-to', secToTimestamp(endSec));
   ffmpegArgs.push('-i', streamUrl, '-vn', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'mp3', 'pipe:1');
 
-  console.log(`[FFmpeg] Spawning stream decoder for: ${streamUrl.substring(0, 60)}...`);
+  console.log(`[FFmpeg] Spawning stream decoder for audio URL...`);
   const ffProc = spawn(ffmpegCmd, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
   let gotData = false;
@@ -140,10 +142,14 @@ async function resolveAudioStreamUrlParallel(videoId) {
   // Piped endpoints
   const pipedHosts = [
     'https://pipedapi.kavin.rocks',
-    'https://api.piped.privacy.com.de',
-    'https://pipedapi.tokhmi.xyz',
-    'https://pipedapi.adminforge.de',
+    'https://api.piped.privacydev.net',
     'https://piped-api.lunar.icu',
+    'https://pipedapi.ducks.party',
+    'https://pipedapi.smnz.de',
+    'https://pipedapi.r4fo.com',
+    'https://pipedapi.leptons.xyz',
+    'https://api.piped.projectsegfau.lt',
+    'https://pipedapi.drgns.space',
     'https://piped-api.garudalinux.org',
   ];
 
@@ -151,11 +157,14 @@ async function resolveAudioStreamUrlParallel(videoId) {
     resolvers.push(
       (async () => {
         const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 4000);
+        const t = setTimeout(() => c.abort(), 6000);
         try {
           const r = await fetch(`${host}/streams/${videoId}`, {
             signal: c.signal,
-            headers: { 'User-Agent': 'Mozilla/5.0' },
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'application/json',
+            },
           });
           clearTimeout(t);
           if (!r.ok) throw new Error(`${host} status ${r.status}`);
@@ -177,17 +186,23 @@ async function resolveAudioStreamUrlParallel(videoId) {
     'https://inv.tux.pizza',
     'https://invidious.private.coffee',
     'https://yt.drgnz.club',
+    'https://invidious.projectsegfau.lt',
+    'https://invidious.drgns.space',
+    'https://iv.melmac.space',
   ];
 
   for (const host of invidiousHosts) {
     resolvers.push(
       (async () => {
         const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 4000);
+        const t = setTimeout(() => c.abort(), 6000);
         try {
           const r = await fetch(`${host}/api/v1/videos/${videoId}`, {
             signal: c.signal,
-            headers: { 'User-Agent': 'Mozilla/5.0' },
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'application/json',
+            },
           });
           clearTimeout(t);
           if (!r.ok) throw new Error(`${host} status ${r.status}`);
@@ -207,11 +222,14 @@ async function resolveAudioStreamUrlParallel(videoId) {
   resolvers.push(
     (async () => {
       const c = new AbortController();
-      const t = setTimeout(() => c.abort(), 4000);
+      const t = setTimeout(() => c.abort(), 6000);
       try {
         const r = await fetch(`https://api.vkrdown.com/api/get?url=https://www.youtube.com/watch?v=${videoId}`, {
           signal: c.signal,
-          headers: { 'User-Agent': 'Mozilla/5.0' },
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+          },
         });
         clearTimeout(t);
         if (!r.ok) throw new Error('vkrdown failed');
