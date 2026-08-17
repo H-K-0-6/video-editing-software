@@ -234,10 +234,12 @@ export default function App() {
 
     try {
       const blob = await engineRef.current.exportVideo((pct) => setExportProgress(pct));
+      const isMp4 = blob.type && blob.type.includes('mp4');
+      const ext = isMp4 ? 'mp4' : 'webm';
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = `AutoReel_${selectedTheme}_${Date.now()}.mp4`;
+      a.download = `AutoReel_${selectedTheme}_${Date.now()}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

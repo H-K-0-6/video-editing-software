@@ -313,14 +313,16 @@ export class VideoRenderEngine {
     }
   }
 
-  // ── Export ────────────────────────────────────────────────────────────────
+  // ── Dedicated High-Stability Video Export ─────────────────────────────────
   async exportVideo(onProgressCallback) {
     this.pause();
     this.seek(0);
     await this.prewarm();
 
+    // Stream from canvas at solid 30 FPS
     const stream = this.canvas.captureStream(30);
 
+    // Audio stream connection
     if (this.audioElement) {
       try {
         if (!this._audioCtx) {
@@ -340,68 +342,92 @@ export class VideoRenderEngine {
       }
     }
 
-    // Determine target duration (max of totalDuration, last clip end, or 15s)
+    // Determine target duration from clips and timeline
     let maxClipEnd = 0;
     if (this.clips && this.clips.length > 0) {
       maxClipEnd = Math.max(...this.clips.map(c => c.endTime || 0));
     }
-    const targetDuration = Math.max(this.totalDuration || 0, maxClipEnd, 10);
+    const targetDuration = Math.max(this.totalDuration || 0, maxClipEnd, 12);
 
-    // Prioritize MP4 formats (H.264/AVC1 + AAC/MP4A) for universal playback on all devices
+    // Choose best supported MIME type
     const candidateTypes = [
       'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-      'video/mp4;codecs=avc1,mp4a.40.2',
-      'video/mp4;codecs=h264,aac',
       'video/mp4;codecs=avc1',
       'video/mp4',
-      'video/webm;codecs=h264,opus',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
       'video/webm',
     ];
 
-    let mimeType = candidateTypes.find(type => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) || 'video/mp4';
+    let mimeType = candidateTypes.find(type => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) || 'video/webm';
 
     const recorder = new MediaRecorder(stream, {
       mimeType,
-      videoBitsPerSecond: 8_000_000,
+      videoBitsPerSecond: 10_000_000,
     });
     const chunks = [];
-    recorder.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
+    recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
 
     return new Promise((resolve, reject) => {
-      let isExportFinished = false;
+      let isDone = false;
 
       recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+        const finalType = chunks.length > 0 && chunks[0].type ? chunks[0].type : mimeType.split(';')[0];
+        const blob = new Blob(chunks, { type: finalType });
         resolve(blob);
       };
       recorder.onerror = e => reject(e);
 
       recorder.start(100);
-      this.play();
 
-      const startWall = performance.now();
-      const totalMs = targetDuration * 1000;
+      // Start audio playback from t=0
+      if (this.audioElement) {
+        this.audioElement.currentTime = 0;
+        this.audioElement.play().catch(e => console.warn('Export audio play:', e));
+      }
 
-      const iv = setInterval(() => {
-        if (isExportFinished) return;
-        const elapsed = performance.now() - startWall;
-        const currentProgress = Math.min(99, Math.round((Math.max(this.currentTime, elapsed / 1000) / targetDuration) * 100));
-        if (onProgressCallback) onProgressCallback(currentProgress);
+      const FPS = 30;
+      const frameDuration = 1 / FPS;
+      let currentTime = 0;
+      const totalFrames = Math.ceil(targetDuration * FPS);
+      let frameCount = 0;
 
-        if (this.currentTime >= targetDuration || elapsed >= totalMs + 500) {
-          isExportFinished = true;
-          clearInterval(iv);
-          this.pause();
+      const exportInterval = setInterval(() => {
+        if (isDone) return;
+
+        currentTime = frameCount * frameDuration;
+        this.currentTime = currentTime;
+
+        // Render current frame
+        this._syncVideoPlayback(currentTime);
+        this.drawFrame(currentTime);
+
+        frameCount++;
+        const pct = Math.min(99, Math.round((frameCount / totalFrames) * 100));
+        if (onProgressCallback) onProgressCallback(pct);
+
+        if (frameCount >= totalFrames) {
+          isDone = true;
+          clearInterval(exportInterval);
+
+          if (this.audioElement) this.audioElement.pause();
+          this._stopActiveVideo();
+
           if (onProgressCallback) onProgressCallback(100);
+
+          try {
+            if (recorder.state === 'recording') {
+              recorder.requestData();
+            }
+          } catch (_) {}
+
           setTimeout(() => {
             try {
               if (recorder.state !== 'inactive') recorder.stop();
             } catch (_) {}
           }, 300);
         }
-      }, 100);
+      }, 1000 / FPS);
     });
   }
 }
