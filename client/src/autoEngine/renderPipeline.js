@@ -10,6 +10,8 @@
  *  - Offscreen ImageBitmap cache for images to avoid repeated uploads to GPU
  */
 
+import * as Mp4Muxer from './mp4-muxer.mjs';
+
 export class VideoRenderEngine {
   constructor(canvas, options = {}) {
     this.width = options.width || 720;
@@ -56,10 +58,11 @@ export class VideoRenderEngine {
     await Promise.all(promises);
   }
 
-  async setProject({ clips, audioElement, totalDuration, onProgress, onEnded }) {
+  async setProject({ clips, audioElement, audioBuffer, totalDuration, onProgress, onEnded }) {
     this._stopActiveVideo();
     this.clips = clips || [];
     this.audioElement = audioElement || null;
+    this.audioBuffer = audioBuffer || null;
     this.totalDuration = totalDuration || 0;
     this.onProgress = onProgress || null;
     this.onEnded = onEnded || null;
@@ -319,120 +322,174 @@ export class VideoRenderEngine {
     this.seek(0);
     await this.prewarm();
 
-    // Stream from canvas at solid 30 FPS
-    const stream = this.canvas.captureStream(30);
-
-    // Audio stream connection
-    if (this.audioElement) {
-      try {
-        if (!this._audioCtx) {
-          this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          this._audioSrcNode = this._audioCtx.createMediaElementSource(this.audioElement);
-          this._audioDestNode = this._audioCtx.createMediaStreamDestination();
-          this._audioSrcNode.connect(this._audioDestNode);
-          this._audioSrcNode.connect(this._audioCtx.destination);
-        }
-        if (this._audioCtx.state === 'suspended') {
-          await this._audioCtx.resume();
-        }
-        const audioTrack = this._audioDestNode.stream.getAudioTracks()[0];
-        if (audioTrack) stream.addTrack(audioTrack);
-      } catch (err) {
-        console.warn('Audio capture setup warning:', err);
-      }
-    }
-
-    // Determine target duration from clips and timeline
     let maxClipEnd = 0;
     if (this.clips && this.clips.length > 0) {
       maxClipEnd = Math.max(...this.clips.map(c => c.endTime || 0));
     }
     const targetDuration = Math.max(this.totalDuration || 0, maxClipEnd, 12);
+    const FPS = 30;
+    const totalFrames = Math.ceil(targetDuration * FPS);
 
-    // Choose best supported MIME type
-    const candidateTypes = [
-      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-      'video/mp4;codecs=avc1',
-      'video/mp4',
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-    ];
-
-    let mimeType = candidateTypes.find(type => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) || 'video/webm';
-
-    const recorder = new MediaRecorder(stream, {
-      mimeType,
-      videoBitsPerSecond: 10_000_000,
+    const muxer = new Mp4Muxer.Muxer({
+      target: new Mp4Muxer.ArrayBufferTarget(),
+      video: {
+        codec: 'avc',
+        width: this.width,
+        height: this.height,
+      },
+      audio: this.audioBuffer ? {
+        codec: 'aac',
+        sampleRate: this.audioBuffer.sampleRate,
+        numberOfChannels: this.audioBuffer.numberOfChannels,
+      } : undefined,
+      fastStart: 'in-memory'
     });
-    const chunks = [];
-    recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
 
-    return new Promise((resolve, reject) => {
-      let isDone = false;
+    let videoEncoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: e => console.error('VideoEncoder error', e)
+    });
+    
+    videoEncoder.configure({
+      codec: 'avc1.640028',
+      width: this.width,
+      height: this.height,
+      bitrate: 10_000_000,
+      framerate: FPS,
+    });
 
-      recorder.onstop = () => {
-        const finalType = chunks.length > 0 && chunks[0].type ? chunks[0].type : mimeType.split(';')[0];
-        const blob = new Blob(chunks, { type: finalType });
-        resolve(blob);
-      };
-      recorder.onerror = e => reject(e);
+    let audioEncoder;
+    let audioQueue = Promise.resolve();
 
-      recorder.start(100);
+    if (this.audioBuffer) {
+      audioEncoder = new AudioEncoder({
+        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+        error: e => console.error('AudioEncoder error', e)
+      });
+      audioEncoder.configure({
+        codec: 'mp4a.40.2',
+        sampleRate: this.audioBuffer.sampleRate,
+        numberOfChannels: this.audioBuffer.numberOfChannels,
+        bitrate: 192_000
+      });
+      
+      // Encode audio completely in the background before finalizing
+      audioQueue = (async () => {
+        const sampleRate = this.audioBuffer.sampleRate;
+        const numChannels = this.audioBuffer.numberOfChannels;
+        const totalSamples = this.audioBuffer.length;
+        const maxSamples = Math.min(totalSamples, Math.ceil(targetDuration * sampleRate));
+        const chunkSize = sampleRate; // 1 second chunks
 
-      // Start audio playback from t=0
-      if (this.audioElement) {
-        this.audioElement.currentTime = 0;
-        this.audioElement.play().catch(e => console.warn('Export audio play:', e));
+        for (let offset = 0; offset < maxSamples; offset += chunkSize) {
+          const size = Math.min(chunkSize, maxSamples - offset);
+          const data = new Float32Array(size * numChannels);
+          for (let c = 0; c < numChannels; c++) {
+            const channelData = this.audioBuffer.getChannelData(c);
+            data.set(channelData.subarray(offset, offset + size), c * size);
+          }
+          
+          const audioData = new AudioData({
+            format: 'f32-planar',
+            sampleRate: sampleRate,
+            numberOfFrames: size,
+            numberOfChannels: numChannels,
+            timestamp: (offset / sampleRate) * 1_000_000,
+            data: data
+          });
+          
+          audioEncoder.encode(audioData);
+          audioData.close();
+          await new Promise(r => setTimeout(r, 0)); // yield loop
+        }
+        await audioEncoder.flush();
+        audioEncoder.close();
+      })();
+    }
+
+    return new Promise(async (resolve, reject) => {
+      try {
+        let frameCount = 0;
+        
+        // Helper to accurately seek video for offline rendering
+        const seekVideo = (el, time) => {
+          return new Promise(res => {
+            if (Math.abs(el.currentTime - time) < 0.05) return res();
+            const handler = () => {
+              el.removeEventListener('seeked', handler);
+              res();
+            };
+            el.addEventListener('seeked', handler);
+            el.currentTime = time;
+          });
+        };
+
+        const encodeNextFrame = async () => {
+          if (frameCount >= totalFrames) {
+            await videoEncoder.flush();
+            videoEncoder.close();
+            if (audioQueue) await audioQueue;
+            
+            muxer.finalize();
+            const buffer = muxer.target.buffer;
+            const blob = new Blob([buffer], { type: 'video/mp4' });
+            if (onProgressCallback) onProgressCallback(100);
+            this._stopActiveVideo();
+            resolve(blob);
+            return;
+          }
+
+          if (videoEncoder.encodeQueueSize > 5) {
+            setTimeout(encodeNextFrame, 10);
+            return;
+          }
+
+          const currentTime = frameCount / FPS;
+          
+          // Manually sync video elements
+          const clip = this._getActiveClip(currentTime);
+          if (clip && clip.mediaType === 'video' && clip.element) {
+             const el = clip.element;
+             if (this._activeVideoEl && this._activeVideoEl !== el) {
+               this._activeVideoEl.pause();
+             }
+             this._activeVideoEl = el;
+             this._activeClipId = clip.id;
+             el.pause(); // Must be paused for frame-by-frame seeking
+             const clipTime = currentTime - clip.startTime;
+             const expectedVideoTime = Math.min(Math.max(0, (clip.videoOffset || 0) + clipTime), (el.duration || 999) - 0.05);
+             await seekVideo(el, expectedVideoTime);
+          } else if (this._activeVideoEl) {
+             this._activeVideoEl.pause();
+             this._activeVideoEl = null;
+             this._activeClipId = clip ? clip.id : null;
+          }
+
+          // Draw canvas
+          this.drawFrame(currentTime);
+          
+          // Encode VideoFrame
+          const frame = new VideoFrame(this.canvas, {
+            timestamp: frameCount * (1_000_000 / FPS),
+            duration: 1_000_000 / FPS
+          });
+          
+          videoEncoder.encode(frame, { keyFrame: frameCount % 60 === 0 });
+          frame.close();
+
+          frameCount++;
+          if (frameCount % 5 === 0 && onProgressCallback) {
+            const pct = Math.min(99, Math.round((frameCount / totalFrames) * 100));
+            onProgressCallback(pct);
+          }
+          
+          setTimeout(encodeNextFrame, 0);
+        };
+        
+        encodeNextFrame();
+      } catch (err) {
+        reject(err);
       }
-
-      const FPS = 30;
-      let currentTime = 0;
-      const startWall = performance.now();
-
-      const exportInterval = setInterval(() => {
-        if (isDone) return;
-
-        let elapsedReal = (performance.now() - startWall) / 1000;
-        
-        // Sync time to audio if playing, otherwise fallback to real time
-        if (this.audioElement && this.audioElement.currentTime > 0) {
-           currentTime = this.audioElement.currentTime;
-        } else {
-           currentTime = elapsedReal;
-        }
-        
-        this.currentTime = currentTime;
-
-        // Render current frame
-        this._syncVideoPlayback(currentTime);
-        this.drawFrame(currentTime);
-
-        const pct = Math.min(99, Math.round((currentTime / targetDuration) * 100));
-        if (onProgressCallback) onProgressCallback(pct);
-
-        if (currentTime >= targetDuration || elapsedReal >= targetDuration + 1) {
-          isDone = true;
-          clearInterval(exportInterval);
-
-          if (this.audioElement) this.audioElement.pause();
-          this._stopActiveVideo();
-
-          if (onProgressCallback) onProgressCallback(100);
-
-          try {
-            if (recorder.state === 'recording') {
-              recorder.requestData();
-            }
-          } catch (_) {}
-
-          setTimeout(() => {
-            try {
-              if (recorder.state !== 'inactive') recorder.stop();
-            } catch (_) {}
-          }, 300);
-        }
-      }, 1000 / FPS);
     });
   }
 }

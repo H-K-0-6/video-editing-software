@@ -383,6 +383,7 @@ export default function App() {
                 engineRef={engineRef}
                 clips={generatedClips}
                 audioElement={audioElement}
+                audioBuffer={audioBuffer}
                 totalDuration={totalDuration}
                 onExport={handleExport}
                 isExporting={isExporting}

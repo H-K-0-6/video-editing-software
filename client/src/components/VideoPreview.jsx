@@ -6,6 +6,7 @@ export default function VideoPreview({
   engineRef,
   clips,
   audioElement,
+  audioBuffer,
   totalDuration,
   onExport,
   isExporting,
@@ -26,6 +27,7 @@ export default function VideoPreview({
     engineRef.current.setProject({
       clips,
       audioElement,
+      audioBuffer,
       totalDuration,
       onProgress: (cur) => setCurrentTime(cur),
       onEnded: () => {
@@ -40,7 +42,7 @@ export default function VideoPreview({
     return () => {
       if (engineRef.current) engineRef.current.pause();
     };
-  }, [clips, audioElement, totalDuration]);
+  }, [clips, audioElement, audioBuffer, totalDuration]);
 
   const togglePlay = () => {
     if (!engineRef.current) return;
