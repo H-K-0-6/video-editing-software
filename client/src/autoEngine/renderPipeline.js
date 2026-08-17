@@ -336,10 +336,20 @@ export class VideoRenderEngine {
       }
     }
 
-    // Best available mimeType
-    let mimeType = 'video/webm;codecs=vp9,opus';
-    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8,opus';
-    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+    // Prioritize MP4 formats (H.264/AVC1 + AAC/MP4A) for universal playback on all devices
+    const candidateTypes = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4;codecs=h264,aac',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=h264,opus',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+
+    let mimeType = candidateTypes.find(type => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) || 'video/mp4';
 
     const recorder = new MediaRecorder(stream, {
       mimeType,
