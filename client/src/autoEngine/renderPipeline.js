@@ -186,13 +186,20 @@ export class VideoRenderEngine {
         this._activeClipId = clip.id;
       }
 
-      // Correct drift: if video is more than 200ms off, re-sync
+      // Correct drift: use playback rate for smooth syncing instead of hard seeking
       const clipTime = time - clip.startTime;
       const expectedVideoTime = (clip.videoOffset || 0) + clipTime;
       const videoTime = el.currentTime;
-      const drift = Math.abs(videoTime - expectedVideoTime);
-      if (drift > 0.25 && !el.seeking) {
+      const drift = videoTime - expectedVideoTime;
+      
+      // If we are way off (e.g. user skipped ahead), do a hard seek
+      if (Math.abs(drift) > 0.5 && !el.seeking) {
         el.currentTime = Math.min(Math.max(0, expectedVideoTime), (el.duration || 999) - 0.05);
+      } else if (Math.abs(drift) > 0.05 && !el.seeking) {
+        // Soft sync: adjust playback rate slightly to catch up or wait
+        el.playbackRate = drift > 0 ? 0.9 : 1.1;
+      } else {
+        el.playbackRate = 1.0;
       }
 
     } else {
