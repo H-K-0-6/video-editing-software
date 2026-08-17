@@ -8,7 +8,15 @@ import { analyzeAudioBeats } from './autoEngine/beatDetector';
 import { generateMontageTimeline } from './autoEngine/montageBuilder';
 import { Sparkles, Wand2, Smartphone, ArrowRight, ArrowLeft, RefreshCw, CheckCircle } from 'lucide-react';
 
-const BACKEND_URL = 'https://video-editing-software-ccmx.onrender.com';
+const BACKEND_URL = typeof window !== 'undefined' && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname.startsWith('192.168.') ||
+  window.location.hostname.startsWith('10.') ||
+  window.location.hostname.startsWith('172.')
+)
+  ? `http://${window.location.hostname}:3001`
+  : 'https://video-editing-software-ccmx.onrender.com';
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState(1); // 1: Media, 2: Audio, 3: Vibe/Generate, 4: Preview
