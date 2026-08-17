@@ -108,8 +108,7 @@ app.get('/api/youtube-audio', (req, res) => {
   const endSec   = parseFloat(end)   || 0;
   const hasRange = endSec > startSec;
 
-  // Build yt-dlp args
-  const ffmpegArgs = FFMPEG ? ['--ffmpeg-location', path.dirname(FFMPEG)] : [];
+  const ffmpegArgs = (FFMPEG && path.dirname(FFMPEG) !== '.') ? ['--ffmpeg-location', path.dirname(FFMPEG)] : [];
 
   const sectionArgs = hasRange
     ? [
