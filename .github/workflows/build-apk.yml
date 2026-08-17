@@ -25,11 +25,11 @@ jobs:
         working-directory: ./client
         run: npm run build
 
-      - name: Setup Java 17
+      - name: Setup Java 21 (Required by Capacitor 7 Android)
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '21'
 
       - name: Setup Capacitor & Sync Android
         working-directory: ./client
