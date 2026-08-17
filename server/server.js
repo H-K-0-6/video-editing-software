@@ -97,21 +97,131 @@ function normalizeYouTubeUrl(rawUrl) {
   return rawUrl.trim();
 }
 
-// ── Helper: Invidious/Public API Stream Fallback ──────────────────────────────
-async function streamViaInvidiousFallback(videoId, startSec, endSec, res) {
-  const instances = [
-    'https://invidious.nerdvpn.de',
-    'https://inv.tux.pizza',
-    'https://yt.drgnz.club',
-    'https://invidious.private.coffee',
-    'https://invidious.jing.rocks',
+// ── Helper: Stream from direct audio URL with ffmpeg ──────────────────────────
+function streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res) {
+  const ffmpegCmd = FFMPEG || 'ffmpeg';
+  const ffmpegArgs = [];
+  if (startSec > 0) ffmpegArgs.push('-ss', secToTimestamp(startSec));
+  if (endSec > startSec) ffmpegArgs.push('-to', secToTimestamp(endSec));
+  ffmpegArgs.push('-i', streamUrl, '-vn', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'mp3', 'pipe:1');
+
+  console.log(`[FFmpeg] Spawning stream decoder for: ${streamUrl.substring(0, 60)}...`);
+  const ffProc = spawn(ffmpegCmd, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  let gotData = false;
+  ffProc.stdout.on('data', (chunk) => {
+    gotData = true;
+    if (!res.headersSent) {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Content-Type', 'audio/mpeg');
+    }
+    res.write(chunk);
+  });
+
+  ffProc.stderr.on('data', (d) => {
+    // console.log('[ffmpeg]', d.toString());
+  });
+
+  ffProc.on('close', (code) => {
+    if (code === 0 || gotData) {
+      if (!res.writableEnded) res.end();
+    } else if (!res.headersSent) {
+      res.status(500).json({ error: 'FFmpeg stream decoding failed.' });
+    }
+  });
+
+  return true;
+}
+
+// ── Helper: Multi-Provider Fallback Streamer (Piped, Cobalt, Invidious) ────────
+async function streamViaMultiProviderFallback(videoId, startSec, endSec, res) {
+  // Provider 1: Piped API instances
+  const pipedInstances = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.privacy.com.de',
+    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.adminforge.de',
+    'https://piped-api.lunar.icu',
   ];
 
-  for (const instance of instances) {
+  for (const instance of pipedInstances) {
     try {
-      console.log(`[Fallback] Trying Invidious instance ${instance} for ${videoId}...`);
+      console.log(`[Fallback: Piped] Trying ${instance}/streams/${videoId}...`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const resp = await fetch(`${instance}/streams/${videoId}`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const audioStreams = data.audioStreams || [];
+      if (!audioStreams.length) continue;
+
+      const selected = audioStreams.find((s) => s.itag === 140 || s.itag === '140') || audioStreams[0];
+      if (selected && selected.url) {
+        console.log(`[Fallback: Piped] Success! Slicing audio stream with FFmpeg...`);
+        return streamAudioFromUrlWithFfmpeg(selected.url, startSec, endSec, res);
+      }
+    } catch (err) {
+      console.warn(`[Fallback: Piped] ${instance} failed:`, err.message);
+    }
+  }
+
+  // Provider 2: Cobalt API instances
+  const cobaltInstances = [
+    'https://cobalt-api.kwiatekm.pl',
+    'https://api.cobalt.tools',
+  ];
+
+  for (const instance of cobaltInstances) {
+    try {
+      console.log(`[Fallback: Cobalt] Trying ${instance}...`);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
+      const resp = await fetch(instance, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          downloadMode: 'audio',
+          audioFormat: 'mp3',
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      if (data && (data.url || data.audio)) {
+        const streamUrl = data.url || data.audio;
+        console.log(`[Fallback: Cobalt] Success! Slicing audio stream with FFmpeg...`);
+        return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
+      }
+    } catch (err) {
+      console.warn(`[Fallback: Cobalt] ${instance} failed:`, err.message);
+    }
+  }
+
+  // Provider 3: Invidious instances
+  const invidiousInstances = [
+    'https://invidious.nerdvpn.de',
+    'https://inv.tux.pizza',
+    'https://invidious.private.coffee',
+    'https://yt.drgnz.club',
+  ];
+
+  for (const instance of invidiousInstances) {
+    try {
+      console.log(`[Fallback: Invidious] Trying ${instance} for ${videoId}...`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
       const resp = await fetch(`${instance}/api/v1/videos/${videoId}`, {
         signal: controller.signal,
         headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -130,43 +240,13 @@ async function streamViaInvidiousFallback(videoId, startSec, endSec, res) {
         audioStreams[0];
 
       const streamUrl = selected.url || `${instance}/latest_version?id=${videoId}&itag=${selected.itag}&local=true`;
-      console.log(`[Fallback] Audio URL found from ${instance}! Streaming with ffmpeg...`);
-
-      const ffmpegCmd = FFMPEG || 'ffmpeg';
-      const ffmpegArgs = [];
-      if (startSec > 0) ffmpegArgs.push('-ss', secToTimestamp(startSec));
-      if (endSec > startSec) ffmpegArgs.push('-to', secToTimestamp(endSec));
-      ffmpegArgs.push('-i', streamUrl, '-vn', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'mp3', 'pipe:1');
-
-      const ffProc = spawn(ffmpegCmd, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-      let gotData = false;
-      ffProc.stdout.on('data', (chunk) => {
-        gotData = true;
-        if (!res.headersSent) {
-          res.header('Access-Control-Allow-Origin', '*');
-          res.header('Content-Type', 'audio/mpeg');
-        }
-        res.write(chunk);
-      });
-
-      ffProc.stderr.on('data', (d) => {
-        // debug
-      });
-
-      ffProc.on('close', (code) => {
-        if (code === 0 || gotData) {
-          if (!res.writableEnded) res.end();
-        } else if (!res.headersSent) {
-          res.status(500).json({ error: 'FFmpeg stream decoding failed from fallback.' });
-        }
-      });
-
-      return true;
+      console.log(`[Fallback: Invidious] Success! Slicing audio stream with FFmpeg...`);
+      return streamAudioFromUrlWithFfmpeg(streamUrl, startSec, endSec, res);
     } catch (err) {
-      console.warn(`[Fallback] Instance ${instance} failed: ${err.message}`);
+      console.warn(`[Fallback: Invidious] ${instance} failed:`, err.message);
     }
   }
+
   return false;
 }
 
@@ -241,7 +321,7 @@ app.get('/api/youtube-audio', async (req, res) => {
     if (strategyIndex >= strategies.length) {
       console.log('[yt-dlp] All native strategies failed. Attempting resilient stream fallback...');
       if (videoId) {
-        const fallbackSuccess = await streamViaInvidiousFallback(videoId, startSec, endSec, res);
+        const fallbackSuccess = await streamViaMultiProviderFallback(videoId, startSec, endSec, res);
         if (fallbackSuccess) return;
       }
 
