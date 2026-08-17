@@ -313,6 +313,7 @@ app.get('/api/youtube-audio', async (req, res) => {
     '--downloader-args', 'ffmpeg:-vn -f mp3',
     '--force-ipv4',
     '--no-playlist',
+    '--remote-components', 'ejs:github',
     ...ffmpegArgs,
     ...sectionArgs,
     '-o', '-',
