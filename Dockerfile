@@ -15,11 +15,11 @@ RUN pip3 install yt-dlp --break-system-packages
 WORKDIR /app
 
 # Copy package.json and install dependencies
-COPY package*.json ./
+COPY server/package*.json ./
 RUN npm install
 
 # Copy all server files
-COPY . .
+COPY server/ .
 
 # Expose the API port
 EXPOSE 3001
