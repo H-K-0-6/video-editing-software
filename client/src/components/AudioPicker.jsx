@@ -241,10 +241,10 @@ export default function AudioPicker({
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', boxSizing: 'border-box' }}>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Audio Segment (e.g. 01:33 to 02:00)</label>
             <div className="time-range-group">
-              <div style={{ flex: 1 }}>
+              <div className="time-input-col">
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Start (MM:SS)</span>
                 <input
                   type="text"
@@ -254,8 +254,8 @@ export default function AudioPicker({
                   onChange={(e) => setYoutubeStartTime(e.target.value)}
                 />
               </div>
-              <span style={{ color: 'var(--text-dim)', alignSelf: 'center', marginTop: 14 }}>&rarr;</span>
-              <div style={{ flex: 1 }}>
+              <span style={{ color: 'var(--text-dim)', alignSelf: 'flex-end', marginBottom: 8, flexShrink: 0 }}>&rarr;</span>
+              <div className="time-input-col">
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>End (MM:SS)</span>
                 <input
                   type="text"

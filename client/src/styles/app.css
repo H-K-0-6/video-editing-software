@@ -234,10 +234,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .input-box {
   width: 100%;
+  box-sizing: border-box;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -253,19 +256,36 @@ body {
 
 .time-range-group {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.time-input-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .time-input {
-  flex: 1;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 8px 6px;
   color: #fff;
   font-size: 0.85rem;
   text-align: center;
+}
+
+.time-input:focus {
+  outline: none;
+  border-color: var(--primary-accent);
 }
 
 /* Theme Cards */
