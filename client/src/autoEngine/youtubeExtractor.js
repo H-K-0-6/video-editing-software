@@ -4,7 +4,7 @@
  * The returned buffer already starts at t=0 and contains ONLY the requested slice.
  */
 
-export async function fetchYouTubeAudioStream({ url, startTimeSec = 0, endTimeSec = 0, backendUrl = 'http://localhost:3001' }) {
+export async function fetchYouTubeAudioStream({ url, startTimeSec = 0, endTimeSec = 0, backendUrl = 'https://video-editing-software-ccmx.onrender.com' }) {
   // Build backend URL with start + end seconds so yt-dlp trims server-side
   const params = new URLSearchParams({ url });
   if (startTimeSec > 0 || endTimeSec > startTimeSec) {

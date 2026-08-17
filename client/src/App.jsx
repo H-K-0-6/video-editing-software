@@ -8,7 +8,7 @@ import { analyzeAudioBeats } from './autoEngine/beatDetector';
 import { generateMontageTimeline } from './autoEngine/montageBuilder';
 import { Sparkles, Wand2, Smartphone, ArrowRight, ArrowLeft, RefreshCw, CheckCircle } from 'lucide-react';
 
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = 'https://video-editing-software-ccmx.onrender.com';
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState(1); // 1: Media, 2: Audio, 3: Vibe/Generate, 4: Preview
