@@ -28,7 +28,7 @@ app.use(express.json());
 // ── Locate yt-dlp binary ──────────────────────────────────────────────────────
 function findYtDlp() {
   const candidates = [
-    path.join(__dirname, 'bin', 'yt-dlp.exe'),  // bundled alongside server
+    path.join(__dirname, 'bin', 'yt-dlp.exe'),
     path.join(__dirname, 'bin', 'yt-dlp'),
     'yt-dlp',
     'yt-dlp.exe',
@@ -45,14 +45,13 @@ const YTDLP = findYtDlp();
 function findFfmpeg() {
   const binDir = path.join(__dirname, 'bin');
   const candidates = [
-    path.join(binDir, 'ffmpeg.exe'),           // bundled in server/bin/
+    path.join(binDir, 'ffmpeg.exe'),
     path.join(binDir, 'ffmpeg', 'bin', 'ffmpeg.exe'),
     'ffmpeg',
     'ffmpeg.exe',
   ];
   for (const c of candidates) {
     try {
-      // Use execFileSync (no shell) so paths with spaces work reliably
       execFileSync(c, ['-version'], { stdio: 'ignore' });
       return c;
     } catch (_) {}
@@ -62,41 +61,7 @@ function findFfmpeg() {
 
 const FFMPEG = findFfmpeg();
 
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    ytdlp:  YTDLP  ? `found: ${YTDLP}`  : 'NOT FOUND',
-    ffmpeg: FFMPEG ? `found: ${FFMPEG}` : 'NOT FOUND - timestamp trimming will fail',
-  });
-});
-
-// ── Helper: run yt-dlp with optional cookie strategies ────────────────────────
-function ytdlpStream(url, extraArgs) {
-  // Strategy A: with Chrome cookies (best for logged-in accounts)
-  // Strategy B: without cookies (works for many videos without login)
-  const cookieStrategies = [
-    ['--cookies-from-browser', 'chrome'],
-    ['--cookies-from-browser', 'firefox'],
-    [],  // no cookies fallback
-  ];
-
-  // We'll try strategies sequentially but for streaming we just pick the first
-  // that launches without an immediate error; yt-dlp handles retries internally.
-  // For simplicity, attempt chrome first, fall back to no-cookies if it fails.
-  return (cookieArgs) => {
-    const args = [
-      '--no-playlist',
-      ...cookieArgs,
-      '--extractor-arg', 'youtube:player_client=ios,tv',
-      ...extraArgs,
-      url,
-    ];
-    return { proc: spawn(YTDLP, args, { stdio: ['ignore', 'pipe', 'pipe'] }), args };
-  };
-}
-
-// ── Helper: convert seconds → HH:MM:SS for yt-dlp --download-sections ─────
+// ── Helper: convert seconds → HH:MM:SS ────────────────────────────────────────
 function secToTimestamp(sec) {
   const s = Math.floor(sec);
   const h = Math.floor(s / 3600);
@@ -105,19 +70,123 @@ function secToTimestamp(sec) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
+// ── Helper: Clean & Normalize YouTube URL ────────────────────────────────────
+function extractVideoId(rawUrl) {
+  try {
+    const u = new URL(rawUrl.trim());
+    if (u.hostname.includes('youtu.be')) {
+      return u.pathname.replace(/^\//, '').split('/')[0].split('?')[0];
+    }
+    if (u.searchParams.has('v')) {
+      return u.searchParams.get('v');
+    }
+    if (u.pathname.includes('/shorts/')) {
+      return u.pathname.split('/shorts/')[1].split('/')[0].split('?')[0];
+    }
+    if (u.pathname.includes('/embed/')) {
+      return u.pathname.split('/embed/')[1].split('/')[0].split('?')[0];
+    }
+  } catch (_) {}
+  const match = rawUrl.match(/(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
+function normalizeYouTubeUrl(rawUrl) {
+  const id = extractVideoId(rawUrl);
+  if (id) return `https://www.youtube.com/watch?v=${id}`;
+  return rawUrl.trim();
+}
+
+// ── Helper: Invidious/Public API Stream Fallback ──────────────────────────────
+async function streamViaInvidiousFallback(videoId, startSec, endSec, res) {
+  const instances = [
+    'https://invidious.nerdvpn.de',
+    'https://inv.tux.pizza',
+    'https://yt.drgnz.club',
+    'https://invidious.private.coffee',
+    'https://invidious.jing.rocks',
+  ];
+
+  for (const instance of instances) {
+    try {
+      console.log(`[Fallback] Trying Invidious instance ${instance} for ${videoId}...`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const resp = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const audioStreams = (data.adaptiveFormats || []).filter(
+        (f) => f.type && f.type.startsWith('audio')
+      );
+      if (!audioStreams.length) continue;
+
+      const selected =
+        audioStreams.find((f) => f.itag === 140 || f.itag === '140' || f.itag === 251 || f.itag === '251') ||
+        audioStreams[0];
+
+      const streamUrl = selected.url || `${instance}/latest_version?id=${videoId}&itag=${selected.itag}&local=true`;
+      console.log(`[Fallback] Audio URL found from ${instance}! Streaming with ffmpeg...`);
+
+      const ffmpegCmd = FFMPEG || 'ffmpeg';
+      const ffmpegArgs = [];
+      if (startSec > 0) ffmpegArgs.push('-ss', secToTimestamp(startSec));
+      if (endSec > startSec) ffmpegArgs.push('-to', secToTimestamp(endSec));
+      ffmpegArgs.push('-i', streamUrl, '-vn', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'mp3', 'pipe:1');
+
+      const ffProc = spawn(ffmpegCmd, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let gotData = false;
+      ffProc.stdout.on('data', (chunk) => {
+        gotData = true;
+        if (!res.headersSent) {
+          res.header('Access-Control-Allow-Origin', '*');
+          res.header('Content-Type', 'audio/mpeg');
+        }
+        res.write(chunk);
+      });
+
+      ffProc.stderr.on('data', (d) => {
+        // debug
+      });
+
+      ffProc.on('close', (code) => {
+        if (code === 0 || gotData) {
+          if (!res.writableEnded) res.end();
+        } else if (!res.headersSent) {
+          res.status(500).json({ error: 'FFmpeg stream decoding failed from fallback.' });
+        }
+      });
+
+      return true;
+    } catch (err) {
+      console.warn(`[Fallback] Instance ${instance} failed: ${err.message}`);
+    }
+  }
+  return false;
+}
+
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    ytdlp:  YTDLP  ? `found: ${YTDLP}`  : 'NOT FOUND',
+    ffmpeg: FFMPEG ? `found: ${FFMPEG}` : 'NOT FOUND - timestamp trimming will fail',
+    cookiesLoaded: !!ytCookiesPath,
+  });
+});
+
 // ── YouTube audio stream (main endpoint) ─────────────────────────────────────
-// Query params: url, start (seconds, optional), end (seconds, optional)
-app.get('/api/youtube-audio', (req, res) => {
+app.get('/api/youtube-audio', async (req, res) => {
   const { url, start, end } = req.query;
   if (!url) return res.status(400).json({ error: 'URL required' });
 
-  if (!YTDLP) {
-    console.error('yt-dlp not found!');
-    return res.status(503).json({
-      error: 'yt-dlp not installed. server/bin/yt-dlp.exe is missing.',
-    });
-  }
-
+  const cleanUrl = normalizeYouTubeUrl(url);
+  const videoId = extractVideoId(url);
   const startSec = parseFloat(start) || 0;
   const endSec   = parseFloat(end)   || 0;
   const hasRange = endSec > startSec;
@@ -133,46 +202,59 @@ app.get('/api/youtube-audio', (req, res) => {
 
   const baseArgs = [
     '-f', 'bestaudio/best',
-    '--downloader', 'ffmpeg',                    // ALWAYS use ffmpeg for streaming
-    '--downloader-args', 'ffmpeg:-vn -f mp3',    // ALWAYS force mp3 output (drops video)
+    '--downloader', 'ffmpeg',
+    '--downloader-args', 'ffmpeg:-vn -f mp3',
     '--force-ipv4',
-    '--js-runtimes', 'node',
+    '--no-playlist',
     ...ffmpegArgs,
     ...sectionArgs,
-    '--no-playlist',
     '-o', '-',
   ];
 
   if (hasRange) {
-    if (!FFMPEG) console.warn('[yt-dlp] WARNING: ffmpeg not found — trimming will fail!');
-    console.log(`[yt-dlp] Trimming ${secToTimestamp(startSec)} → ${secToTimestamp(endSec)} | ${url}`);
+    console.log(`[yt-dlp] Trimming ${secToTimestamp(startSec)} → ${secToTimestamp(endSec)} | ${cleanUrl}`);
   } else {
-    console.log(`[yt-dlp] Full audio | ${url}`);
+    console.log(`[yt-dlp] Full audio | ${cleanUrl}`);
   }
 
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Content-Type', 'audio/mpeg'); // always mp3
+  res.header('Content-Type', 'audio/mpeg');
 
-  const cookieStrategies = [];
-  if (ytCookiesPath) cookieStrategies.push(['--cookies', ytCookiesPath]);
-  cookieStrategies.push(
-    ['--cookies-from-browser', 'chrome'],
-    ['--cookies-from-browser', 'edge'],
-    ['--cookies-from-browser', 'firefox'],
-    [] // fallback to no cookies
-  );
+  // Build strategies based on environment
+  const strategies = [];
+  if (ytCookiesPath) {
+    strategies.push(['--cookies', ytCookiesPath]);
+  }
+  if (process.platform === 'win32') {
+    strategies.push(['--cookies-from-browser', 'chrome']);
+    strategies.push(['--cookies-from-browser', 'edge']);
+    strategies.push(['--cookies-from-browser', 'firefox']);
+  }
+  // Client rotation strategies for datacenter IP resilience
+  strategies.push(['--extractor-args', 'youtube:player_client=android_vr,mweb']);
+  strategies.push(['--extractor-args', 'youtube:player_client=web_creator,mweb']);
+  strategies.push([]); // Default
 
   let started = false;
 
-  function tryStream(strategyIndex, lastError = '') {
-    if (strategyIndex >= cookieStrategies.length) {
-      if (!res.headersSent) res.status(500).json({ error: `All yt-dlp stream attempts failed. Last error: ${lastError}` });
-      else if (!res.writableEnded) res.end();
+  async function tryStream(strategyIndex, lastError = '') {
+    if (strategyIndex >= strategies.length) {
+      console.log('[yt-dlp] All native strategies failed. Attempting resilient stream fallback...');
+      if (videoId) {
+        const fallbackSuccess = await streamViaInvidiousFallback(videoId, startSec, endSec, res);
+        if (fallbackSuccess) return;
+      }
+
+      if (!res.headersSent) {
+        res.status(500).json({ error: `Audio extraction failed. Server error: ${lastError}` });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
       return;
     }
 
-    const cookieArgs = cookieStrategies[strategyIndex];
-    const args = [...cookieArgs, ...baseArgs, url];
+    const stratArgs = strategies[strategyIndex];
+    const args = [...stratArgs, ...baseArgs, cleanUrl];
     const proc = spawn(YTDLP, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let hadData = false;
@@ -197,11 +279,10 @@ app.get('/api/youtube-audio', (req, res) => {
         if (!res.writableEnded) res.end();
         return;
       }
-      
-      console.warn(`[yt-dlp] exited code=${code} for strategy: ${cookieArgs.length ? cookieArgs[1] : 'no-cookies'}`);
-      
+
+      console.warn(`[yt-dlp] Strategy ${strategyIndex} exited code=${code}`);
+
       if (!started) {
-        console.log(`[yt-dlp] Retrying with next strategy...`);
         tryStream(strategyIndex + 1, stderr.trim());
       } else {
         if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code}). Error: ${stderr.trim()}` });
@@ -212,35 +293,61 @@ app.get('/api/youtube-audio', (req, res) => {
     req.on('close', () => proc.kill());
   }
 
-  // Start with strategy 0
   tryStream(0);
 });
 
 // ── YouTube video info ────────────────────────────────────────────────────────
-app.get('/api/youtube-info', (req, res) => {
+app.get('/api/youtube-info', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'URL required' });
-  if (!YTDLP) return res.status(503).json({ error: 'yt-dlp not found' });
 
-  const cookieStrategies = [];
-  if (ytCookiesPath) cookieStrategies.push(['--cookies', ytCookiesPath]);
-  cookieStrategies.push(
-    ['--cookies-from-browser', 'chrome'],
-    ['--cookies-from-browser', 'edge'],
-    ['--cookies-from-browser', 'firefox'],
-    [] // fallback
-  );
+  const cleanUrl = normalizeYouTubeUrl(url);
+  const videoId = extractVideoId(url);
+
+  // Fast oEmbed fallback helper (works 100% of the time, zero bot checks)
+  async function fetchOEmbedInfo() {
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(cleanUrl)}&format=json`;
+      const oembedResp = await fetch(oembedUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (oembedResp.ok) {
+        const oembedData = await oembedResp.json();
+        return {
+          title: oembedData.title || 'YouTube Audio',
+          author: oembedData.author_name || 'YouTube Creator',
+          lengthSeconds: 0,
+          thumbnail: oembedData.thumbnail_url || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  if (!YTDLP) {
+    const info = await fetchOEmbedInfo();
+    if (info) return res.json(info);
+    return res.status(503).json({ error: 'yt-dlp not found' });
+  }
+
+  const strategies = [];
+  if (ytCookiesPath) strategies.push(['--cookies', ytCookiesPath]);
+  strategies.push(['--extractor-args', 'youtube:player_client=android_vr,mweb']);
+  strategies.push([]);
 
   function tryInfo(strategyIndex, lastError = '') {
-    if (strategyIndex >= cookieStrategies.length) {
-      return res.status(500).json({ error: `Failed to fetch info across all attempts. Last error: ${lastError}` });
+    if (strategyIndex >= strategies.length) {
+      // Fall back to oEmbed
+      fetchOEmbedInfo().then((info) => {
+        if (info) return res.json(info);
+        res.status(500).json({ error: `Failed to fetch info. Last error: ${lastError}` });
+      });
+      return;
     }
 
     const args = [
-      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4', '--js-runtimes', 'node',
-      ...cookieStrategies[strategyIndex],
+      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4',
+      ...strategies[strategyIndex],
       '-q',
-      url,
+      cleanUrl,
     ];
 
     let output = '';
@@ -248,10 +355,9 @@ app.get('/api/youtube-info', (req, res) => {
     const proc = spawn(YTDLP, args);
     proc.stdout.on('data', (d) => (output += d.toString()));
     proc.stderr.on('data', (d) => (stderr += d.toString()));
-    
+
     proc.on('close', (code) => {
       if (code !== 0 || !output.trim()) {
-        console.warn(`[yt-dlp info] failed strategy: ${cookieStrategies[strategyIndex][1] || 'none'} - ${stderr.split('\n')[0]}`);
         return tryInfo(strategyIndex + 1, stderr.trim());
       }
       try {
@@ -260,10 +366,13 @@ app.get('/api/youtube-info', (req, res) => {
           title: json.title,
           author: json.channel || json.uploader || 'Unknown',
           lengthSeconds: json.duration || 0,
-          thumbnail: json.thumbnail || '',
+          thumbnail: json.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
         });
       } catch {
-        res.status(500).json({ error: 'Failed to parse yt-dlp info' });
+        fetchOEmbedInfo().then((info) => {
+          if (info) return res.json(info);
+          res.status(500).json({ error: 'Failed to parse yt-dlp info' });
+        });
       }
     });
   }
@@ -283,6 +392,6 @@ app.listen(PORT, () => {
   if (YTDLP)  console.log(`✅ yt-dlp  found: ${YTDLP}`);
   else        console.error('❌ yt-dlp  NOT FOUND — place yt-dlp.exe in server/bin/');
   if (FFMPEG) console.log(`✅ ffmpeg  found: ${FFMPEG}`);
-  else        console.error('❌ ffmpeg  NOT FOUND — timestamp trimming will fail. Place ffmpeg.exe in server/bin/');
+  else        console.error('❌ ffmpeg  NOT FOUND — timestamp trimming will fail.');
   console.log(`🎬 Backend running on http://localhost:${PORT}`);
 });

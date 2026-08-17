@@ -1,12 +1,19 @@
 # Use a lightweight Node.js 20 image
 FROM node:20-slim
 
-# Install system dependencies (ffmpeg, python3, pip)
+# Install system dependencies (ffmpeg, python3, pip, curl, unzip)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
     python3-pip \
+    curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Deno (yt-dlp's default supported JS runtime for YouTube signature solving)
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_INSTALL="/root/.deno"
+ENV PATH="$DENO_INSTALL/bin:$PATH"
 
 # Install yt-dlp via pip (this ensures we have the latest Linux version)
 RUN pip3 install yt-dlp --break-system-packages
