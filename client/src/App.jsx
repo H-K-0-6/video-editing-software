@@ -187,7 +187,7 @@ export default function App() {
       setStatusMessage('');
     } catch (err) {
       console.error('YouTube audio extraction error:', err);
-      alert('Unable to extract audio for this YouTube URL.\n\nTip: Make sure you double-clicked "start_dev.bat" to start the local backend server, or upload any local audio file / click "Use High-Energy Demo Track"!');
+      alert(`Unable to extract audio for this YouTube URL.\n\nError from server: ${err.message}\n\nTip: You can upload any local audio file or click "Use High-Energy Demo Track" to proceed without YouTube!`);
     } finally {
       setIsLoadingAudio(false);
       setStatusMessage('');
