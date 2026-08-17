@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Auto Video Generator</string>
+    <string name="title_activity_main">Auto Video Generator</string>
+    <string name="package_name">com.autovideogen.app</string>
+    <string name="custom_url_scheme">com.autovideogen.app</string>
+</resources>
