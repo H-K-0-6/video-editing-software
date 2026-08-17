@@ -125,7 +125,6 @@ app.get('/api/youtube-audio', (req, res) => {
     ...ffmpegArgs,
     ...sectionArgs,
     '--no-playlist',
-    '--extractor-arg', 'youtube:player_client=ios,tv',
     '-o', '-',
   ];
 
@@ -221,7 +220,6 @@ app.get('/api/youtube-info', (req, res) => {
     const args = [
       '--dump-json', '--no-playlist', '--no-download', '--force-ipv4',
       ...cookieStrategies[strategyIndex],
-      '--extractor-arg', 'youtube:player_client=ios,tv',
       '-q',
       url,
     ];
