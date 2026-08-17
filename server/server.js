@@ -203,6 +203,28 @@ async function resolveAudioStreamUrlParallel(videoId) {
     );
   }
 
+  // Additional direct media resolver
+  resolvers.push(
+    (async () => {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 4000);
+      try {
+        const r = await fetch(`https://api.vkrdown.com/api/get?url=https://www.youtube.com/watch?v=${videoId}`, {
+          signal: c.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
+        clearTimeout(t);
+        if (!r.ok) throw new Error('vkrdown failed');
+        const j = await r.json();
+        const streamUrl = j?.data?.downloadUrl || j?.data?.streamUrl || j?.downloadUrl;
+        if (streamUrl) return streamUrl;
+        throw new Error('No vkrdown url');
+      } finally {
+        clearTimeout(t);
+      }
+    })()
+  );
+
   try {
     const fastestUrl = await Promise.any(resolvers);
     console.log('[Fast Resolver] Found valid audio stream URL in parallel!');
