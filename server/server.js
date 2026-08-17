@@ -122,6 +122,7 @@ app.get('/api/youtube-audio', (req, res) => {
     '-f', 'bestaudio/best',
     '--downloader', 'ffmpeg',                    // ALWAYS use ffmpeg for streaming
     '--downloader-args', 'ffmpeg:-vn -f mp3',    // ALWAYS force mp3 output (drops video)
+    '--force-ipv4',
     ...ffmpegArgs,
     ...sectionArgs,
     '--no-playlist',
@@ -148,9 +149,9 @@ app.get('/api/youtube-audio', (req, res) => {
 
   let started = false;
 
-  function tryStream(strategyIndex) {
+  function tryStream(strategyIndex, lastError = '') {
     if (strategyIndex >= cookieStrategies.length) {
-      if (!res.headersSent) res.status(500).json({ error: 'All yt-dlp stream attempts failed.' });
+      if (!res.headersSent) res.status(500).json({ error: `All yt-dlp stream attempts failed. Last error: ${lastError}` });
       else if (!res.writableEnded) res.end();
       return;
     }
@@ -186,9 +187,9 @@ app.get('/api/youtube-audio', (req, res) => {
       
       if (!started) {
         console.log(`[yt-dlp] Retrying with next strategy...`);
-        tryStream(strategyIndex + 1);
+        tryStream(strategyIndex + 1, stderr.trim());
       } else {
-        if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code}). See backend console.` });
+        if (!res.headersSent) res.status(500).json({ error: `yt-dlp failed (code ${code}). Error: ${stderr.trim()}` });
         else if (!res.writableEnded) res.end();
       }
     });
@@ -213,13 +214,13 @@ app.get('/api/youtube-info', (req, res) => {
     [] // fallback
   ];
 
-  function tryInfo(strategyIndex) {
+  function tryInfo(strategyIndex, lastError = '') {
     if (strategyIndex >= cookieStrategies.length) {
-      return res.status(500).json({ error: 'Failed to fetch info across all attempts.' });
+      return res.status(500).json({ error: `Failed to fetch info across all attempts. Last error: ${lastError}` });
     }
 
     const args = [
-      '--dump-json', '--no-playlist', '--no-download',
+      '--dump-json', '--no-playlist', '--no-download', '--force-ipv4',
       ...cookieStrategies[strategyIndex],
       '--extractor-arg', 'youtube:player_client=android,web',
       '-q',
@@ -235,7 +236,7 @@ app.get('/api/youtube-info', (req, res) => {
     proc.on('close', (code) => {
       if (code !== 0 || !output.trim()) {
         console.warn(`[yt-dlp info] failed strategy: ${cookieStrategies[strategyIndex][1] || 'none'} - ${stderr.split('\n')[0]}`);
-        return tryInfo(strategyIndex + 1);
+        return tryInfo(strategyIndex + 1, stderr.trim());
       }
       try {
         const json = JSON.parse(output);
